@@ -14,6 +14,9 @@ from functools import lru_cache
 from pathlib import Path
 from pathlib import PosixPath
 
+from copy_utils import DEFAULT_BUFFER_SIZE
+from copy_utils import copy_with_callback
+
 
 # USB AutoMount:
 # $ sudo apt install usbmount
@@ -48,6 +51,10 @@ def _list_files_and_dirs(dir_path):
 class VideoPath(PosixPath):
 
     @property
+    def device_id(self):
+        return str(self).split("/")[-4].replace("-", "_")
+
+    @property
     @lru_cache
     def date_created(self):
         return VideoPath._date_to_str(
@@ -72,6 +79,11 @@ class VideoPath(PosixPath):
 
 
 class USBPath(PosixPath):
+
+    @property
+    def device_id(self):
+        return str(self).split("/")[-1].replace("-", "_")
+
     @lru_cache
     def is_gopro(self):
         return os.path.isfile(self / "Get_started_with_GoPro.url")
@@ -115,14 +127,14 @@ class USBPath(PosixPath):
 def get_usb_devices():
     context = pyudev.Context()
 
-    removable = [
+    removable_devices = [
         device 
         for device in context.list_devices(subsystem='block', DEVTYPE='disk') 
         if device.attributes.asstring('removable') == "1"
     ]
 
     device_list = list()
-    for device in removable:
+    for device in removable_devices:
 
         partitions = [
             device.device_node 
@@ -161,44 +173,62 @@ def get_usb_devices():
     return go_pro_device, target_device
 
 
-def copy_file(source, target_device):
-    target_dir = target_device / source.date_created
+def copy_file(source_f, target_device, dry_run=False):
+    target_dir = Path(
+        f"{target_device / source_f.date_created}____{source_f.device_id}"
+    )
 
     try:
         os.makedirs(target_dir)
-        print("created")
     except FileExistsError:
-        print("exists")
         pass
 
-    target = target_dir / source.name
-    print(f"{source=}")
-    print(f"{target=}")
-    try:
-        print("Starting Copy ...")
-        start_t = time.perf_counter()
-        shutil.copy(source, target)
-        elapsed_t = round(time.perf_counter() - start_t)
-        print(f"File `{source}` copied successfully - {elapsed_t:d} secs.")
-    
-    # If source and destination are same
-    except shutil.SameFileError:
-        print("Source and destination represents the same file.")
-    
-    # If there is any permission issue
-    except PermissionError:
-        print("Permission denied.")
-    
-    # For other errors
-    except Exception as e:
-        print(f"Error occurred while copying file: {e}.")
+    target_f = VideoPath(target_dir / source_f.name)
+    filesize = os.stat(source_f).st_size
+    filesize_in_Mb = round(filesize / (1<<17))  # bytes to Mb
+
+    # print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", end="", flush=True)
+    print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
+
+    if not dry_run:
+        try:
+            start_t = time.perf_counter()
+            if False:
+                shutil.copy(source_f, target_f)
+            else:
+                from tqdm import tqdm
+                bar_format = "{percentage:3.0f}% |{bar}| Elapsed: {elapsed} - Remaining:{remaining}"
+                with tqdm(total=filesize, bar_format=bar_format) as bar:
+                    dest = copy_with_callback(
+                        source_f,
+                        target_f,
+                        follow_symlinks=True,
+                        callback=lambda copied, total_copied, total: bar.update(copied),
+                        buffer_size=DEFAULT_BUFFER_SIZE,
+                    )
+            elapsed_t = round(time.perf_counter() - start_t)
+            print(f"SUCCESS! Total: {elapsed_t:d} secs - Transfer: {float(filesize_in_Mb)/elapsed_t:.1f} Mb/s.")
+        
+        # If source and destination are same
+        except shutil.SameFileError:
+            print("SKIP: Same File")
+        
+        # If there is any permission issue
+        except PermissionError:
+            print("ERROR: Permission denied.")
+        
+        # For other errors
+        except Exception as e:
+            print(f"ERROR: {e}")
 
 if __name__ == "__main__":
     gopro_device, target_device = get_usb_devices()
 
     videos = gopro_device.list_all_videos()
-    print(f"{videos=}")
-    # video_dates = list(set([vid.date_created for vid in videos]))
-    # print(f"{video_dates=}")
-    for video in videos:
+    
+    for id, video in enumerate(videos):
+
+        if id >= 5:
+            break
+        
         copy_file(video, target_device)
