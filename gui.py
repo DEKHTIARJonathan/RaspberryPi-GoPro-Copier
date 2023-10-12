@@ -7,16 +7,41 @@ import RPi.GPIO as GPIO
 import copy
 import math
 import time
+import os
 import sys
 
+from collections import defaultdict
 from contextlib import contextmanager
 from functools import lru_cache
+from functools import partial
+from pathlib import Path
+
+from copy_utils import DEFAULT_BUFFER_SIZE
+from copy_utils import copy_with_callback
+
+from runtime import get_or_create_target_dir
+from runtime import get_usb_devices
+from runtime import USBPath
+from runtime import VideoPath
 
 from PIL import Image
 from PIL import ImageDraw
 
 __author__ = "Jonathan Dekhtiar"
 __version__ = "0.0.1"
+
+
+class VideoListing(object):
+    def __init__(self, source_d: USBPath) -> None:
+        self._videos_dict = source_d.list_all_videos()
+
+    @property
+    @lru_cache
+    def days(self):
+        return sorted(self._videos_dict.keys(), reverse=True)
+    
+    def get_videos(self, day):
+        return self._videos_dict[day]
 
 
 class Display(object):
@@ -30,8 +55,7 @@ class Display(object):
     max_height = height - (y_offset * 2)
     max_lines = 6
 
-    @contextmanager
-    def get_draw_ctx(self):
+    def _setup_draw_disp_base(self):
         # Create blank image for drawing.
         # Make sure to create image with mode '1' for 1-bit color.
         image = Image.new('RGB', (Display.width, Display.height))
@@ -41,27 +65,62 @@ class Display(object):
         # Black background
         draw.rectangle((0, 0, Display.width, Display.height), outline=0, fill=0)
 
+        return draw, image
+
+    @contextmanager
+    def get_draw_ctx(self):
+
+        draw, image = self._setup_draw_disp_base()
+
         yield draw
 
         # Display
         self._disp.LCD_ShowImage(image,0,0)
 
     @property
-    def days(self):
-        if self._days is None:
-            raise RuntimeError("Days are not defined ...")
+    def source_d(self):
+        if self._source_d is None:
+            raise RuntimeError("`source_d` is not defined ...")
         
-        return self._days
+        return self._source_d
 
-    @days.setter
-    def days(self, day_list):
-        if self._days is not None:
-            raise RuntimeError("Days is already defined ...")
+    @source_d.setter
+    def source_d(self, device):
+        if self._source_d is not None:
+            raise RuntimeError("`source_d` is already defined ...")
         
-        if not isinstance(day_list, list):
-            raise ValueError(f"`day_list` should be a list, received: {type(day_list)}")
+        if not isinstance(device, USBPath):
+            raise ValueError(f"`source_d` should be an instance of `USBPath`, received: {type(device)}")
         
-        self._days = copy.deepcopy(day_list)
+        self._source_d = device
+
+    @property
+    def target_d(self):
+        if self._target_d is None:
+            raise RuntimeError("`target_d` is not defined ...")
+        
+        return self._target_d
+
+    @target_d.setter
+    def target_d(self, device):
+        if self._target_d is not None:
+            raise RuntimeError("`target_d` is already defined ...")
+        
+        if not isinstance(device, USBPath):
+            raise ValueError(f"`target_d` should be an instance of `USBPath`, received: {type(device)}")
+        
+        self._target_d = device
+
+    @property
+    def days(self):        
+        return self.videos.days
+
+    @property
+    def videos(self):
+        if self._videos is None:
+            self._videos = VideoListing(source_d=self.source_d)
+        
+        return self._videos
 
     @property
     @lru_cache
@@ -81,7 +140,9 @@ class Display(object):
         return math.ceil(len(self.days) / Display.max_lines)
 
     def __init__(self) -> None:
-        self._days = None
+        self._videos = None
+        self._source_d = None
+        self._target_d = None
 
         # 240x240 display with hardware SPI:
         self._disp = LCD_1in44.LCD()
@@ -188,11 +249,13 @@ class Display(object):
 
         else:
             selected_day = self.days[self._page_idx * Display.max_lines:][self._cur_pos]
-            self.progress_screen(date=selected_day)
+            self.disp_copy_screen_loop(date=selected_day)
             self.disp_refresh_day_selector()  # return to date select screen
 
-    def exec_loop(self, days):
-        self.days = days
+    def exec_loop(self, source_d: USBPath, target_d: USBPath):
+
+        self.source_d = source_d
+        self.target_d = target_d
         
         KEY_UP_PIN     = 6 
         KEY_DOWN_PIN   = 19
@@ -252,73 +315,74 @@ class Display(object):
                 time.sleep(0.1)
 
     @staticmethod
-    def _draw_progress_bar(draw, pos_x, pos_y, width, height, progress, fg=(211,211,211)):
-        width = int(width * progress)
-        diameter = int(min(height, width))
+    def _draw_progress_bar(draw, pos_x, pos_y, bar_width, height, progress, fg=(211,211,211)):
+        current_width = int(bar_width * progress)
 
-        draw.rectangle((pos_x + (diameter / 2), pos_y, pos_x + width - (diameter / 2), pos_y + height), fill=fg, width=10)
-        # Start Ellipse
-        draw.ellipse((pos_x, pos_y, pos_x + diameter, pos_y + height), fill=fg)
-        # End Ellipse
-        if width > diameter:
-            draw.ellipse((pos_x + width - diameter, pos_y, pos_x + width, pos_y + height), fill=fg)
+        draw.rectangle((pos_x, pos_y, pos_x + current_width, pos_y + height), fill=fg)
 
-    def progress_screen(self, date):
-        num_files = 5
+    def disp_copy_screen_loop(self, date):
 
-        for idx in range(1, num_files + 1):
+        videos = self.videos.get_videos(day=date)
+        print(f"{videos=}")
 
-            # size = 536870912 >> 20  # bytes to megabytes
-            import random
-            file_size = random.randint(100, 4000)
+        target_dir = get_or_create_target_dir(
+            date=date, 
+            source_d=self.source_d, 
+            target_d=self.target_d
+        )
+
+        for idx, source_f in enumerate(videos):
+
+            target_f = VideoPath(target_dir / source_f.name)
+            filesize_in_Mb = round(source_f.size / (1<<17))  # bytes to Mb
+
+            print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
+
+            draw, image = self._setup_draw_disp_base()
+                
+            line_len = 21
+            # Base Layout
+            draw.text((21, 15), f"~ {date} ~", fill="WHITE")
+            draw.text((0, 35), "-" * line_len, fill="WHITE")
+
+            # General Progress Data
+            draw.text((5, 53), f"COPY: {idx + 1:04d}/{len(videos):04d} ...", fill="WHITE")
+
+            draw.text((5, 68), f"Size: {filesize_in_Mb:.1f} Mb", fill="WHITE")
+            draw.text((0, 85), "-" * line_len, fill="WHITE")
+
+            # Progress bar Update Fn
+            bar_x_offset = 10
+            def bar_callback_fn(copied, total_copied, total):
+                Display._draw_progress_bar(
+                    draw=draw,
+                    pos_x=bar_x_offset,
+                    pos_y=105,
+                    bar_width=Display.width - (bar_x_offset * 2), 
+                    height=10,
+                    progress=total_copied /total  #  Between 0..1
+                )
+                self._disp.LCD_ShowImage(image,0,0)
             
-            for progress in range(33):
-
-                progress *= 3
-
-                with self.get_draw_ctx() as draw:
-                    
-                    line_len = 21
-                    # Base Layout
-                    draw.text((21, 15), f"~ {date} ~", fill="WHITE")
-                    draw.text((0, 35), "-" * line_len, fill="WHITE")
-
-                    # Progress Data
-                    draw.text((5, 53), f"COPY: {idx:04d}/{num_files:04d} ...", fill="WHITE")
-
-                    draw.text((5, 68), f"Size: {file_size} MB", fill="WHITE")
-                    draw.text((0, 85), "-" * line_len, fill="WHITE")
-
-                    bar_x_offset = 10
-
-                    Display._draw_progress_bar(
-                        draw=draw,
-                        pos_x=bar_x_offset,
-                        pos_y=105,
-                        width=Display.width - (bar_x_offset * 2), 
-                        height=10,
-                        progress=progress / 100.  #  Between 0..1
-                    )
+            # for progress in range(0, 100, 3):
+            #     update_fn(None, progress, 100)
+            copy_with_callback(
+                source_f,
+                target_f,
+                follow_symlinks=True,
+                callback=bar_callback_fn,
+                buffer_size=DEFAULT_BUFFER_SIZE,
+            )
 
 
 if __name__ == "__main__":
 
     display = Display()
 
-    days = [
-        "2023_10_02",
-        "2023_02_02",
-        "2023_04_02",
-        "2023_11_02",
-        "2023_10_07",
-        "2023_02_01",
-        "2023_12_02",
-        "2023_04_07",
-        "2023_01_22",
-        "2023_01_07"
-    ]
+    from runtime import get_usb_devices
+    gopro_device, target_device = get_usb_devices()
 
-    days = sorted(days, reverse=True)
-
-    time.sleep(5)
-    display.exec_loop(days=days)
+    display.exec_loop(
+        source_d=gopro_device,
+        target_d=target_device
+    )

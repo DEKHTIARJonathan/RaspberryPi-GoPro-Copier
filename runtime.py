@@ -7,6 +7,7 @@ import re
 import shutil
 import time
 
+from collections import defaultdict 
 from datetime import datetime
 from functools import lru_cache 
 
@@ -76,7 +77,11 @@ class VideoPath(PosixPath):
     @lru_cache
     def _timestamp_to_date(tmstp):
         return datetime.fromtimestamp(tmstp).date()
-
+    
+    @property
+    @lru_cache
+    def size(self):
+        return os.stat(self).st_size
 
 class USBPath(PosixPath):
 
@@ -99,10 +104,17 @@ class USBPath(PosixPath):
             if os.path.isdir(obj_path) and dir_pattern.match(dir_name):
                 video_dirs.append(obj_path)
         
-        videos = list()
+        videos = defaultdict(list) 
         for dir_name in video_dirs:
             for video_f in USBPath.scan_dir_for_videos(dir_name):
-                videos.append(video_f)
+                videos[video_f.date_created].append(video_f)
+
+        for date in videos.keys():
+            videos[date] = sorted(
+                videos[date], 
+                key=lambda v: v.date_created, 
+                reverse=True
+            )
 
         return videos
     
@@ -120,7 +132,7 @@ class USBPath(PosixPath):
             if str(filepath).lower().endswith(".mp4"):
                 videos.append(VideoPath(filepath))
 
-        return sorted(videos, key=lambda v: v.date_created, reverse=True)
+        return videos
     
 
 
@@ -184,10 +196,8 @@ def copy_file(source_f, target_device, dry_run=False):
         pass
 
     target_f = VideoPath(target_dir / source_f.name)
-    filesize = os.stat(source_f).st_size
-    filesize_in_Mb = round(filesize / (1<<17))  # bytes to Mb
+    filesize_in_Mb = round(target_f.size / (1<<17))  # bytes to Mb
 
-    # print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", end="", flush=True)
     print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
 
     if not dry_run:
@@ -198,7 +208,7 @@ def copy_file(source_f, target_device, dry_run=False):
             else:
                 from tqdm import tqdm
                 bar_format = "{percentage:3.0f}% |{bar}| Elapsed: {elapsed} - Remaining:{remaining}"
-                with tqdm(total=filesize, bar_format=bar_format) as bar:
+                with tqdm(total=target_f.size, bar_format=bar_format) as bar:
                     dest = copy_with_callback(
                         source_f,
                         target_f,
@@ -221,14 +231,33 @@ def copy_file(source_f, target_device, dry_run=False):
         except Exception as e:
             print(f"ERROR: {e}")
 
+
+def get_or_create_target_dir(date, source_d, target_d):
+    target_dir = Path(
+        f"{target_d / date}____{source_d.device_id}"
+    )
+
+    try:
+        os.makedirs(target_dir)
+    except FileExistsError:
+        pass
+
+    return target_dir
+
+
 if __name__ == "__main__":
     gopro_device, target_device = get_usb_devices()
 
     videos = gopro_device.list_all_videos()
+
+    print(videos["2023_06_12"])
+
+    import sys
+    sys.exit(0)
     
     for id, video in enumerate(videos):
 
         if id >= 5:
             break
-        
+
         copy_file(video, target_device)
