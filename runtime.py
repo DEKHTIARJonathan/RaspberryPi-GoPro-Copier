@@ -2,6 +2,7 @@
 import pyudev
 import psutil
 
+import hashlib
 import os
 import re
 import shutil
@@ -31,7 +32,12 @@ from copy_utils import copy_with_callback
 #     Add: @reboot python /path/to/file.py >/home/jonathan/logs/cronlog 2>&1
 
 # Install Dependencies
-# pip install -u pyudev psutil
+# pip install -r requirements.txt
+
+# Allow shutdown without `sudo`
+# sudo visudo
+# Add: %group_name ALL=(ALL) NOPASSWD: /sbin/poweroff, /sbin/reboot, /sbin/shutdown
+
 
 def _list_files_and_dirs(dir_path):
     res = []
@@ -54,6 +60,16 @@ class VideoPath(PosixPath):
     @property
     def device_id(self):
         return str(self).split("/")[-4].replace("-", "_")
+    
+    @property
+    @lru_cache
+    def md5sum(self):
+        md5_hash = hashlib.md5()
+        with open(self,"rb") as f:
+            # Read and update hash in chunks of 4K
+            for byte_block in iter(lambda: f.read(4096),b""):
+                md5_hash.update(byte_block)
+            return md5_hash.hexdigest()
 
     @property
     @lru_cache
@@ -161,10 +177,10 @@ def get_usb_devices():
             device_list.append(USBPath(p.mountpoint))
 
     
-    if len(device_list) != 2:
+    if len(device_list) > 2:
         raise RuntimeError(
             "Incorrect number of USB devices detected. "
-            f"2 expected, received: {len(device_list)}")
+            f"2 or less expected, received: {len(device_list)}")
     
     go_pro_device = None
     target_device = None
@@ -174,13 +190,6 @@ def get_usb_devices():
             go_pro_device = device
         else:
             target_device = device
-
-    if go_pro_device is None or target_device is None:
-        raise RuntimeError(
-            "Incorrect device detected:"
-            f"\n\t- [0] {device[0]} => Is Go Pro: {device[0].is_gopro()}"
-            f"\n\t- [1] {device[1]} => Is Go Pro: {device[1].is_gopro()}"
-        )
     
     return go_pro_device, target_device
 
@@ -196,7 +205,7 @@ def copy_file(source_f, target_device, dry_run=False):
         pass
 
     target_f = VideoPath(target_dir / source_f.name)
-    filesize_in_Mb = round(target_f.size / (1<<17))  # bytes to Mb
+    filesize_in_Mb = round(source_f.size / (1<<17))  # bytes to Mb
 
     print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
 
@@ -208,8 +217,8 @@ def copy_file(source_f, target_device, dry_run=False):
             else:
                 from tqdm import tqdm
                 bar_format = "{percentage:3.0f}% |{bar}| Elapsed: {elapsed} - Remaining:{remaining}"
-                with tqdm(total=target_f.size, bar_format=bar_format) as bar:
-                    dest = copy_with_callback(
+                with tqdm(total=source_f.size, bar_format=bar_format) as bar:
+                    copy_with_callback(
                         source_f,
                         target_f,
                         follow_symlinks=True,
@@ -249,13 +258,8 @@ if __name__ == "__main__":
     gopro_device, target_device = get_usb_devices()
 
     videos = gopro_device.list_all_videos()
-
-    print(videos["2023_06_12"])
-
-    import sys
-    sys.exit(0)
     
-    for id, video in enumerate(videos):
+    for id, video in enumerate(videos["2023_06_12"]):
 
         if id >= 5:
             break

@@ -28,7 +28,7 @@ from PIL import Image
 from PIL import ImageDraw
 
 __author__ = "Jonathan Dekhtiar"
-__version__ = "0.0.1"
+__version__ = "1.0.0"
 
 
 class VideoListing(object):
@@ -167,6 +167,8 @@ class Display(object):
             draw.text((0, 85), "-" * line_len, fill="WHITE")
             draw.text((18, 105), f"... LOADING ...", fill="WHITE")
 
+        time.sleep(5)  # Force display of the welcome screen for 5 secs.
+
     def disp_refresh_day_selector(self):
 
         with self.get_draw_ctx() as draw:
@@ -245,17 +247,16 @@ class Display(object):
     def press_select(self):
         if self._cur_pos == -1:
             GPIO.cleanup()
-            sys.exit(0)
+            os.system('sudo shutdown now')
 
         else:
             selected_day = self.days[self._page_idx * Display.max_lines:][self._cur_pos]
             self.disp_copy_screen_loop(date=selected_day)
             self.disp_refresh_day_selector()  # return to date select screen
 
-    def exec_loop(self, source_d: USBPath, target_d: USBPath):
+    def exec_loop(self):
 
-        self.source_d = source_d
-        self.target_d = target_d
+        self.disp_wait_for_USB_devices_ready_loop()
         
         KEY_UP_PIN     = 6 
         KEY_DOWN_PIN   = 19
@@ -323,7 +324,6 @@ class Display(object):
     def disp_copy_screen_loop(self, date):
 
         videos = self.videos.get_videos(day=date)
-        print(f"{videos=}")
 
         target_dir = get_or_create_target_dir(
             date=date, 
@@ -334,9 +334,10 @@ class Display(object):
         for idx, source_f in enumerate(videos):
 
             target_f = VideoPath(target_dir / source_f.name)
+
             filesize_in_Mb = round(source_f.size / (1<<17))  # bytes to Mb
 
-            print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
+            print(f"[LOG] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
 
             draw, image = self._setup_draw_disp_base()
                 
@@ -350,6 +351,21 @@ class Display(object):
 
             draw.text((5, 68), f"Size: {filesize_in_Mb:.1f} Mb", fill="WHITE")
             draw.text((0, 85), "-" * line_len, fill="WHITE")
+
+            # Verifying the file doesn't already exist in the target device
+            if target_f.is_file():
+
+                # Writing Hash Verification Msg
+                draw.text((15, 105), "Checking Hash ...", fill="WHITE")
+                self._disp.LCD_ShowImage(image,0,0)
+                
+                # Pre-emptively mask message with a black bar displayed at next `LCD_ShowImage`
+                draw.rectangle((0, 90, Display.width, Display.height), fill="BLACK")
+                if target_f.size == source_f.size and target_f.md5sum and source_f.md5sum:
+                    print(f"[LOG] File `{source_f}` already exists => Skipped.")
+                    continue
+                else:  # Files are different - Delete and Overwrite
+                    target_f.unlink()
 
             # Progress bar Update Fn
             bar_x_offset = 10
@@ -374,15 +390,26 @@ class Display(object):
                 buffer_size=DEFAULT_BUFFER_SIZE,
             )
 
+    def disp_wait_for_USB_devices_ready_loop(self):
+
+        while True:
+            source_d, target_d = get_usb_devices()
+
+            if source_d is not None and target_d is not None:
+                break
+
+            with self.get_draw_ctx() as draw:
+                draw.text((10, 25), "Waiting for USB:", fill="WHITE")
+                draw.text((10, 55), f"* Source: {source_d if source_d is None else source_d.device_id}", fill="WHITE")
+                draw.text((10, 85), f"* Target: {target_d if target_d is None else target_d.device_id}", fill="WHITE")
+
+            time.sleep(1)
+
+        self.source_d = source_d
+        self.target_d = target_d
 
 if __name__ == "__main__":
 
     display = Display()
 
-    from runtime import get_usb_devices
-    gopro_device, target_device = get_usb_devices()
-
-    display.exec_loop(
-        source_d=gopro_device,
-        target_d=target_device
-    )
+    display.exec_loop()
