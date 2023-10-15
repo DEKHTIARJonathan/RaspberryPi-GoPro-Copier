@@ -246,8 +246,15 @@ class Display(object):
 
     def press_select(self):
         if self._cur_pos == -1:
+            print("[INFO] Unmounting USB Devices ...")
+            assert(self.source_d.umount())
+            assert(self.target_d.umount())
+            print("[INFO] Cleaning up GPIO")
             GPIO.cleanup()
+            print("[INFO] Now shutting down ...")
+            time.sleep(2)
             os.system('sudo shutdown now')
+            sys.exit(0)
 
         else:
             selected_day = self.days[self._page_idx * Display.max_lines:][self._cur_pos]

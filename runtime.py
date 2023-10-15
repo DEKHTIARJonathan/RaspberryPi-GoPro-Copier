@@ -19,12 +19,20 @@ from pathlib import PosixPath
 from copy_utils import DEFAULT_BUFFER_SIZE
 from copy_utils import copy_with_callback
 
+# Install exFat support (always useful)
+# sudo apt-get update
+# sudo apt-get install exfat-fuse exfat-utils
 
 # USB AutoMount:
+# sudo apt-get update
 # $ sudo apt install usbmount
+# Then configuration
 # $ sudo vi /etc/usbmount/usbmount.conf
+#     Replace: MOUNTOPTIONS="sync,noexec,nodev,noatime,nodiratime"   # Remove `sync` option
+#          by: MOUNTOPTIONS="noexec,nodev,noatime,nodiratime"
+
 #     Add: `FILESYSTEMS="exfat vfat ext2 ext3 ext4 hfsplus"`
-#     Add: `FS_MOUNTOPTIONS="-fstype=vfat,uid=1000,gid=1000,dmask=0077,fmask=0177"`
+#     Add: `FS_MOUNTOPTIONS="-fstype=exfat,uid=1000,gid=1000,umask=0002 -fstype=vfat,uid=1000,gid=1000,umask=0002"`
 # $ sudo reboot 0
 
 # Add to crontab:
@@ -36,7 +44,7 @@ from copy_utils import copy_with_callback
 
 # Allow shutdown without `sudo`
 # sudo visudo
-# Add: %group_name ALL=(ALL) NOPASSWD: /sbin/poweroff, /sbin/reboot, /sbin/shutdown
+# Add: %group_name ALL=(ALL) NOPASSWD: /sbin/poweroff, /sbin/reboot, /sbin/shutdown, /bin/umount
 
 
 def _list_files_and_dirs(dir_path):
@@ -150,6 +158,16 @@ class USBPath(PosixPath):
 
         return videos
     
+    def umount(self):
+        print(f"[INFO] Unmounting Device `{self}` ... ", end="", flush=True)
+        if os.system(f'sudo umount {self}') == 0:
+            print("SUCCESS !")
+            return True
+        
+        else:
+            print("ERROR !")
+            return False
+    
 
 
 def get_usb_devices():
@@ -212,19 +230,16 @@ def copy_file(source_f, target_device, dry_run=False):
     if not dry_run:
         try:
             start_t = time.perf_counter()
-            if False:
-                shutil.copy(source_f, target_f)
-            else:
-                from tqdm import tqdm
-                bar_format = "{percentage:3.0f}% |{bar}| Elapsed: {elapsed} - Remaining:{remaining}"
-                with tqdm(total=source_f.size, bar_format=bar_format) as bar:
-                    copy_with_callback(
-                        source_f,
-                        target_f,
-                        follow_symlinks=True,
-                        callback=lambda copied, total_copied, total: bar.update(copied),
-                        buffer_size=DEFAULT_BUFFER_SIZE,
-                    )
+            from tqdm import tqdm
+            bar_format = "{percentage:3.0f}% |{bar}| Elapsed: {elapsed} - Remaining:{remaining}"
+            with tqdm(total=source_f.size, bar_format=bar_format) as bar:
+                copy_with_callback(
+                    source_f,
+                    target_f,
+                    follow_symlinks=True,
+                    callback=lambda copied, total_copied, total: bar.update(copied),
+                    buffer_size=DEFAULT_BUFFER_SIZE,
+                )
             elapsed_t = round(time.perf_counter() - start_t)
             print(f"SUCCESS! Total: {elapsed_t:d} secs - Transfer: {float(filesize_in_Mb)/elapsed_t:.1f} Mb/s.")
         
