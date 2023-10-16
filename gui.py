@@ -342,9 +342,9 @@ class Display(object):
 
             target_f = VideoPath(target_dir / source_f.name)
 
-            filesize_in_Mb = round(source_f.size / (1<<17))  # bytes to Mb
+            filesize_in_MB = round(source_f.size / (1<<17)) / 8  # bytes to MB
 
-            print(f"[LOG] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
+            print(f"[LOG] Copying: {source_f.name} => {target_f} - Size: {filesize_in_MB} MB ... ", flush=True)
 
             draw, image = self._setup_draw_disp_base()
                 
@@ -356,7 +356,7 @@ class Display(object):
             # General Progress Data
             draw.text((5, 53), f"COPY: {idx + 1:04d}/{len(videos):04d} ...", fill="WHITE")
 
-            draw.text((5, 68), f"Size: {filesize_in_Mb:.1f} Mb", fill="WHITE")
+            draw.text((5, 68), f"Size: {filesize_in_MB:.1f} MB", fill="WHITE")
             draw.text((0, 85), "-" * line_len, fill="WHITE")
 
             # Verifying the file doesn't already exist in the target device

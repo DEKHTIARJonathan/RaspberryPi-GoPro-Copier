@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+
 import pyudev
 import psutil
 
@@ -12,39 +13,11 @@ from collections import defaultdict
 from datetime import datetime
 from functools import lru_cache 
 
-
 from pathlib import Path
 from pathlib import PosixPath
 
 from copy_utils import DEFAULT_BUFFER_SIZE
 from copy_utils import copy_with_callback
-
-# Install exFat support (always useful)
-# sudo apt-get update
-# sudo apt-get install exfat-fuse exfat-utils
-
-# USB AutoMount:
-# sudo apt-get update
-# $ sudo apt install usbmount
-# Then configuration
-# $ sudo vi /etc/usbmount/usbmount.conf
-#     Replace: MOUNTOPTIONS="sync,noexec,nodev,noatime,nodiratime"   # Remove `sync` option
-#          by: MOUNTOPTIONS="noexec,nodev,noatime,nodiratime"
-
-#     Add: `FILESYSTEMS="exfat vfat ext2 ext3 ext4 hfsplus"`
-#     Add: `FS_MOUNTOPTIONS="-fstype=exfat,uid=1000,gid=1000,umask=0002 -fstype=vfat,uid=1000,gid=1000,umask=0002"`
-# $ sudo reboot 0
-
-# Add to crontab:
-# $ sudo crontab -e
-#     Add: @reboot python /path/to/file.py >/home/jonathan/logs/cronlog 2>&1
-
-# Install Dependencies
-# pip install -r requirements.txt
-
-# Allow shutdown without `sudo`
-# sudo visudo
-# Add: %group_name ALL=(ALL) NOPASSWD: /sbin/poweroff, /sbin/reboot, /sbin/shutdown, /bin/umount
 
 
 def _list_files_and_dirs(dir_path):
@@ -169,7 +142,6 @@ class USBPath(PosixPath):
             return False
     
 
-
 def get_usb_devices():
     context = pyudev.Context()
 
@@ -223,9 +195,9 @@ def copy_file(source_f, target_device, dry_run=False):
         pass
 
     target_f = VideoPath(target_dir / source_f.name)
-    filesize_in_Mb = round(source_f.size / (1<<17))  # bytes to Mb
+    filesize_in_MB = round(source_f.size / (1<<17)) / 8 # bytes to MB
 
-    print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_Mb} Mb ... ", flush=True)
+    print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_MB} MB ... ", flush=True)
 
     if not dry_run:
         try:
@@ -241,7 +213,7 @@ def copy_file(source_f, target_device, dry_run=False):
                     buffer_size=DEFAULT_BUFFER_SIZE,
                 )
             elapsed_t = round(time.perf_counter() - start_t)
-            print(f"SUCCESS! Total: {elapsed_t:d} secs - Transfer: {float(filesize_in_Mb)/elapsed_t:.1f} Mb/s.")
+            print(f"SUCCESS! Total: {elapsed_t:d} secs - Transfer: {float(filesize_in_MB)/elapsed_t:.1f} MB/s.")
         
         # If source and destination are same
         except shutil.SameFileError:
