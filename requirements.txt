@@ -1,2 +1,5 @@
-pyudev 
-psutil
+pyudev~=0.24
+psutil~=5.9
+Pillow~=10.1
+RPi.GPIO~=0.7
+smbus~=1.1

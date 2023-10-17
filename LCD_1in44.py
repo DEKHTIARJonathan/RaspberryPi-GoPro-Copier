@@ -32,11 +32,13 @@ import numpy as np
 
 LCD_1IN44 = 1
 LCD_1IN8 = 0
+
 if LCD_1IN44 == 1:
 	LCD_WIDTH  = 128  #LCD width
-	LCD_HEIGHT = 128 #LCD height
+	LCD_HEIGHT = 128  #LCD height
 	LCD_X = 2
 	LCD_Y = 1
+ 
 if LCD_1IN8 == 1:
 	LCD_WIDTH  = 160
 	LCD_HEIGHT = 128

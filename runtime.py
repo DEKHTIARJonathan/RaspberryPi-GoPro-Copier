@@ -36,7 +36,7 @@ def _list_files_and_dirs(dir_path):
     return res
 
 
-class VideoPath(PosixPath):
+class VideoFile(PosixPath):
 
     @property
     def device_id(self):
@@ -55,8 +55,8 @@ class VideoPath(PosixPath):
     @property
     @lru_cache
     def date_created(self):
-        return VideoPath._date_to_str(
-            VideoPath._timestamp_to_date(os.path.getctime(self))
+        return VideoFile._date_to_str(
+            VideoFile._timestamp_to_date(os.path.getctime(self))
         )
     
     @staticmethod
@@ -66,8 +66,8 @@ class VideoPath(PosixPath):
     @property
     @lru_cache
     def date_last_modified(self):
-        return VideoPath._date_to_str(
-            VideoPath._timestamp_to_date(os.path.getmtime(self))
+        return VideoFile._date_to_str(
+            VideoFile._timestamp_to_date(os.path.getmtime(self))
         )
     
     @staticmethod
@@ -80,7 +80,8 @@ class VideoPath(PosixPath):
     def size(self):
         return os.stat(self).st_size
 
-class USBPath(PosixPath):
+
+class USBDevice(PosixPath):
 
     @property
     def device_id(self):
@@ -89,6 +90,10 @@ class USBPath(PosixPath):
     @lru_cache
     def is_gopro(self):
         return os.path.isfile(self / "Get_started_with_GoPro.url")
+
+    @lru_cache
+    def is_source(self):
+        return self.is_gopro()
     
     @lru_cache
     def list_all_videos(self):
@@ -103,7 +108,7 @@ class USBPath(PosixPath):
         
         videos = defaultdict(list) 
         for dir_name in video_dirs:
-            for video_f in USBPath.scan_dir_for_videos(dir_name):
+            for video_f in USBDevice.scan_dir_for_videos(dir_name):
                 videos[video_f.date_created].append(video_f)
 
         for date in videos.keys():
@@ -127,7 +132,7 @@ class USBPath(PosixPath):
                 continue
 
             if str(filepath).lower().endswith(".mp4"):
-                videos.append(VideoPath(filepath))
+                videos.append(VideoFile(filepath))
 
         return videos
     
@@ -164,7 +169,7 @@ def get_usb_devices():
             if p.device not in partitions:
                 continue
 
-            device_list.append(USBPath(p.mountpoint))
+            device_list.append(USBDevice(p.mountpoint))
 
     
     if len(device_list) > 2:
@@ -172,16 +177,16 @@ def get_usb_devices():
             "Incorrect number of USB devices detected. "
             f"2 or less expected, received: {len(device_list)}")
     
-    go_pro_device = None
+    source_device = None
     target_device = None
 
     for device in device_list:
-        if device.is_gopro():
-            go_pro_device = device
+        if device.is_source():
+            source_device = device
         else:
             target_device = device
     
-    return go_pro_device, target_device
+    return source_device, target_device
 
 
 def copy_file(source_f, target_device, dry_run=False):
@@ -194,7 +199,7 @@ def copy_file(source_f, target_device, dry_run=False):
     except FileExistsError:
         pass
 
-    target_f = VideoPath(target_dir / source_f.name)
+    target_f = VideoFile(target_dir / source_f.name)
     filesize_in_MB = round(source_f.size / (1<<17)) / 8 # bytes to MB
 
     print(f"[INFO] Copying: {source_f.name} => {target_f} - Size: {filesize_in_MB} MB ... ", flush=True)
@@ -242,9 +247,9 @@ def get_or_create_target_dir(date, source_d, target_d):
 
 
 if __name__ == "__main__":
-    gopro_device, target_device = get_usb_devices()
+    source_device, target_device = get_usb_devices()
 
-    videos = gopro_device.list_all_videos()
+    videos = source_device.list_all_videos()
     
     for id, video in enumerate(videos["2023_06_12"]):
 

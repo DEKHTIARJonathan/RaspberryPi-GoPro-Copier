@@ -7,11 +7,10 @@
 import os
 import pathlib
 import shutil
+import time
 
-# how many bytes to read at once?
-# shutil.copy uses 1024 * 1024 if _WINDOWS else 64 * 1024
-# however, in my testing on MacOS with SSD, I've found a much larger buffer is faster
-DEFAULT_BUFFER_SIZE = 4096 * 1024
+
+DEFAULT_BUFFER_SIZE = 1024 * 1024  # 1 MB
 
 
 class SameFileError(OSError):
@@ -83,35 +82,40 @@ def copy_with_callback(
             os.unlink(destfile)
         os.symlink(os.readlink(str(srcfile)), str(destfile))
     else:
-        size = os.stat(src).st_size
-        with open(srcfile, "rb") as fsrc:
-            with open(destfile, "wb") as fdest:
-                _copyfileobj(
-                    fsrc, fdest, callback=callback, total=size, length=buffer_size
-                )
+        _copyfileobj(
+            srcfile=srcfile, 
+            destfile=destfile, 
+            callback=callback, 
+            buf_size=buffer_size
+        )
     shutil.copymode(str(srcfile), str(destfile))
     return str(destfile)
 
 
-def _copyfileobj(fsrc, fdest, callback, total, length):
+def _copyfileobj(srcfile, destfile, callback, buf_size):
     """ copy from fsrc to fdest
 
     Args:
         fsrc: filehandle to source file
         fdest: filehandle to destination file
         callback: callable callback that will be called after every length bytes copied
-        total: total bytes in source file (will be passed to callback)
-        length: how many bytes to copy at once (between calls to callback)
+        buf_size: how many bytes to copy at once (between calls to callback)
     """
-    copied = 0
-    while True:
-        buf = fsrc.read(length)
-        if not buf:
-            break
-        fdest.write(buf)
-        copied += len(buf)
-        if callback is not None:
-            callback(len(buf), copied, total)
+    total_size = os.stat(srcfile).st_size
+    last_callback_update = time.perf_counter()
+    
+    with open(srcfile, "rb") as fsrc:
+        with open(destfile, "wb") as fdest:
+            
+            step = 1            
+            while data_buffer := fsrc.read(buf_size):
+                fdest.write(data_buffer)
+                step += 1
+                
+                if callback is not None and (time.perf_counter() - last_callback_update > 0.5):
+                    copied = min(step * buf_size, total_size)   # the last chunk may be smaller than CHUNK_SIZE.
+                    callback(len(data_buffer), copied, total_size)
+                    last_callback_update = time.perf_counter()
 
 
 if __name__ == "__main__":

@@ -37,97 +37,85 @@ LCD Screen
 
 ## Project install
 
-#### A. Clone the project
+### A. Enable Interfaces
+
+* **Enable SPI Interface**
+
+Necessary to enable the LCD screen to function.
+
+More info on: https://www.waveshare.com/wiki/1.44inch_LCD_HAT
+
+```bash
+sudo raspi-config
+Choose Interfacing Options -> SPI -> Yes to enable SPI interface
+sudo reboot 0
+```
+
+* **[Optional] Enable I2C Interface**
+
+If you intend to use the WaveShare Battery UPS Hat: https://www.waveshare.com/ups-hat-c.htm
+
+It's recommend to enable the I2C Interface
+
+```bash
+sudo raspi-config 
+Choose Interfacing Options -> I2C -> Yes to enable I2C interface
+sudo reboot 0
+```
+
+### B. Clone the project
 
 Please follow these steps:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y wget curl vim git
+sudo apt-get install -y \
+  wget curl vim git \
+  python3.11 python3.11-dev \
+  python3-pip
+sudo rm /usr/lib/python3.11/EXTERNALLY-MANAGED  # Prevent PEP 668 annoyance
 ```
 
 Then let's clone the project:
 
 ```bash
+ssh-keygen -t ed25519 -C "your_email@example.com"
+cat ~/.ssh/id_ed25519.pub
+```
+
+```bash
 cd ~/ 
 git clone https://github.com/DEKHTIARJonathan/RaspberryPi-GoPro-Copier.git
 cd RaspberryPi-GoPro-Copier
+bash install_deps.sh
 ```
 
-#### B. Install Dependencies for the LCD Screen
+### C. Test & Verify Installation
 
-Many of these steps are detailled here: https://www.waveshare.com/wiki/1.44inch_LCD_HAT
-
-* **Install BCM2835 libraries**
-
-```bash
-wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.71.tar.gz
-tar zxvf bcm2835-1.71.tar.gz
-cd bcm2835-1.71/
-sudo ./configure && sudo make && sudo make check && sudo make install
-# For more information, please refer to the official website: http://www.airspayce.com/mikem/bcm2835/
-```
-
-* **Install wiringPi libraries**
-
-```bash
-sudo apt-get update
-sudo apt-get install wiringpi
-#For Raspberry Pi systems after May 2019 (earlier than before, you may not need to execute), you may need to upgrade:
-wget https://project-downloads.drogon.net/wiringpi-latest.deb
-sudo dpkg -i wiringpi-latest.deb
-gpio -v
-# Run gpio -v and version 2.52 will appear. If it does not appear, the installation is wrong
-```
-
-* **Install Python libraries**
-
-```bash
-sudo apt-get update
-sudo apt-get install python3-pip
-sudo apt-get install python3-pil
-sudo apt-get install python3-numpy
-sudo pip3 install RPi.GPIO
-sudo pip3 install spidev
-```
-
-* **Test the Program**
-
-```bash
-cd python
-python main.py
-python key_demo.py
-```
-
-* **Reboot**
-
-```bash
-sudo reboot 0
-```
-
-#### C. Install Python Dependencies for the program
+* **Test the LCD Screen**
 
 ```bash
 cd ~/RaspberryPi-GoPro-Copier
-pip install -r requirements.txt
+
+# Install Numpy
+sudo apt update
+sudo apt-get install -y libopenblas-dev  # Necessary for numpy
+pip3 install --no-cache --upgrade numpy
+
+python demo_LCD_screen.py   # CTRL + C to exit
 ```
 
-#### D. Some configuration & setup
+* **[Optional] Test the UPS Batery Pack Screen**
 
-* **Install ExFat Support**
-
+You can test proper operation by doing:
 ```bash
-# Install exFat support (always useful)
-sudo apt-get update
-sudo apt-get install exfat-fuse exfat-utils
+cd ~/RaspberryPi-GoPro-Copier
+python demo_UPS_hat.py
 ```
 
-* **Install USB AutoMount to automatically mount USB Storage devices**
+### D. Some configuration & setup
 
-```bash
-sudo apt-get update
-sudo apt install usbmount
-```
+* **Configure USB AutoMount to automatically mount USB Storage devices**
 
 Then we need to configure `usbmount`:
 
@@ -137,10 +125,42 @@ And then:
 ```bash
 # Replace: MOUNTOPTIONS="sync,noexec,nodev,noatime,nodiratime"   # Remove `sync` option
 #      by: MOUNTOPTIONS="noexec,nodev,noatime,nodiratime"
-
-#     Add: `FILESYSTEMS="exfat vfat ext2 ext3 ext4 hfsplus"`
-#     Add: `FS_MOUNTOPTIONS="-fstype=exfat,uid=1000,gid=1000,umask=0002 -fstype=vfat,uid=1000,gid=1000,umask=0002"`
+#
+# Replace: FILESYSTEMS="vfat ext2 ext3 ext4 hfsplus"
+#      by: FILESYSTEMS="exfat ntfs fuseblk vfat ext2 ext3 ext4 hfsplus"
+#
+# Replace: FS_MOUNTOPTIONS=""
+#      by: FS_MOUNTOPTIONS="-fstype=exfat,nls=utf8,uid=1000,gid=1000,umask=0002 -fstype=vfat,nls=utf8,uid=1000,gid=1000,umask=0002 -fstype=ntfs-3g,nls=utf8,uid=1000,gid=1000,umask=0002 -fstype=fuseblk,nls=utf8,uid=1000,gid=1000,umask=0002"
 ```
+
+Then restart the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo service systemd-udevd --full-restart
+```
+
+* **Allow some sudo commands to require no passwords: reboot/shutdown/unmount**
+
+Don't forget to replace `[your_username]` below
+
+``` bash
+$ sudo visudo
+#     Add: %[your_username] ALL=(ALL) NOPASSWD: /sbin/poweroff, /sbin/reboot, /sbin/shutdown, /bin/umount
+```
+
+### E. Test the application manually
+
+Launch the application as follows:
+
+```bash
+cd ~/RaspberryPi-GoPro-Copier
+python gui.py
+```
+
+Once it is confirmed to work, you can close with `CTRL + C`
+
+### E. Make the application to autostart at boot
 
 * **Crontab to autostart our software**
 
@@ -149,13 +169,6 @@ Don't forget to replace `[your_username]` below
 ``` bash
 $ sudo crontab -e  # Opens Crontab config file
 #     Add: @reboot su [your_username] -c "/bin/bash /home/[your_username]/RaspberryPi-GoPro-Copier/startup.sh" >/home/[your_username]/RaspberryPi-GoPro-Copier/logs/cronlog 2>&1
-```
-
-* **Allow some sudo commands to require no passwords: reboot/shutdown/unmount**
-
-``` bash
-$ sudo visudo
-#     Add: %[your_username] ALL=(ALL) NOPASSWD: /sbin/poweroff, /sbin/reboot, /sbin/shutdown, /bin/umount
 ```
 
 * **Finally Reboot**

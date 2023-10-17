@@ -1,6 +1,7 @@
+#!/usr/bin/env python
 # -*- coding:utf-8 -*-
+
 import LCD_1in44
-import LCD_Config
 
 import RPi.GPIO as GPIO
 
@@ -10,19 +11,16 @@ import time
 import os
 import sys
 
-from collections import defaultdict
 from contextlib import contextmanager
 from functools import lru_cache
-from functools import partial
-from pathlib import Path
 
 from copy_utils import DEFAULT_BUFFER_SIZE
 from copy_utils import copy_with_callback
 
 from runtime import get_or_create_target_dir
 from runtime import get_usb_devices
-from runtime import USBPath
-from runtime import VideoPath
+from runtime import USBDevice
+from runtime import VideoFile
 
 from PIL import Image
 from PIL import ImageDraw
@@ -31,9 +29,20 @@ __author__ = "Jonathan Dekhtiar"
 __version__ = "1.0.0"
 
 
+__line_len__ = 43
+
+
 class VideoListing(object):
-    def __init__(self, source_d: USBPath) -> None:
+    def __init__(self, source_d: USBDevice) -> None:
+        if not source_d.is_source():
+            raise RuntimeError(f"Only source devices can be accepted. Received {source_d}")
+        
         self._videos_dict = source_d.list_all_videos()
+        
+    @property
+    @lru_cache
+    def videos(self):
+        return self._videos_dict
 
     @property
     @lru_cache
@@ -41,7 +50,7 @@ class VideoListing(object):
         return sorted(self._videos_dict.keys(), reverse=True)
     
     def get_videos(self, day):
-        return self._videos_dict[day]
+        return self.videos[day]
 
 
 class Display(object):
@@ -89,8 +98,8 @@ class Display(object):
         if self._source_d is not None:
             raise RuntimeError("`source_d` is already defined ...")
         
-        if not isinstance(device, USBPath):
-            raise ValueError(f"`source_d` should be an instance of `USBPath`, received: {type(device)}")
+        if not isinstance(device, USBDevice):
+            raise ValueError(f"`source_d` should be an instance of `USBDevice`, received: {type(device)}")
         
         self._source_d = device
 
@@ -106,8 +115,8 @@ class Display(object):
         if self._target_d is not None:
             raise RuntimeError("`target_d` is already defined ...")
         
-        if not isinstance(device, USBPath):
-            raise ValueError(f"`target_d` should be an instance of `USBPath`, received: {type(device)}")
+        if not isinstance(device, USBDevice):
+            raise ValueError(f"`target_d` should be an instance of `USBDevice`, received: {type(device)}")
         
         self._target_d = device
 
@@ -159,13 +168,12 @@ class Display(object):
 
         with self.get_draw_ctx() as draw:
             
-            line_len = 21
-            draw.text((10, 15), "GO PRO DATA COPIER", fill="WHITE")
-            draw.text((0, 35), "-" * line_len, fill="WHITE")
-            draw.text((12, 53), f"{__author__}", fill="WHITE")
-            draw.text((22, 68), f"Version: {__version__}", fill="WHITE")
-            draw.text((0, 85), "-" * line_len, fill="WHITE")
-            draw.text((18, 105), f"... LOADING ...", fill="WHITE")
+            draw.text((15, 15), "GO PRO DATA COPIER", fill="WHITE")
+            draw.text((0, 35), "-" * __line_len__, fill="WHITE")
+            draw.text((17, 53), f"{__author__}", fill="WHITE")
+            draw.text((32, 68), f"Version: {__version__}", fill="WHITE")
+            draw.text((0, 85), "-" * __line_len__, fill="WHITE")
+            draw.text((32, 105), f"... LOADING ...", fill="WHITE")
 
         time.sleep(5)  # Force display of the welcome screen for 5 secs.
 
@@ -175,7 +183,8 @@ class Display(object):
 
             # Base Layout
             draw.text(Display.init_pos, "Days Available:", fill="WHITE")
-            draw.text((Display.width - 30, Display.height - Display.y_offset), "EXIT", fill="WHITE")
+            exit_y_pos = Display.height - int(Display.y_offset * 1.3)
+            draw.text((Display.width - 30, exit_y_pos), "EXIT", fill="WHITE")
         
             days = self.days[self._page_idx * Display.max_lines:]
             for idx, day in enumerate(days):
@@ -196,7 +205,7 @@ class Display(object):
                 draw.text((Display.x_offset - 10, self.line_struct[self._cur_pos]), ">", fill="WHITE")
 
             else:
-                draw.text((Display.width - 40, Display.height - Display.y_offset), ">", fill="WHITE")
+                draw.text((Display.width - 40, exit_y_pos), ">", fill="WHITE")
 
     def move_up(self):
         self._cur_pos -= 1
@@ -340,27 +349,28 @@ class Display(object):
 
         for idx, source_f in enumerate(videos):
 
-            target_f = VideoPath(target_dir / source_f.name)
+            target_f = VideoFile(target_dir / source_f.name)
 
             filesize_in_MB = round(source_f.size / (1<<17)) / 8  # bytes to MB
 
-            print(f"[LOG] Copying: {source_f.name} => {target_f} - Size: {filesize_in_MB} MB ... ", flush=True)
-
             draw, image = self._setup_draw_disp_base()
                 
-            line_len = 21
             # Base Layout
             draw.text((21, 15), f"~ {date} ~", fill="WHITE")
-            draw.text((0, 35), "-" * line_len, fill="WHITE")
+            draw.text((0, 35), "-" * __line_len__, fill="WHITE")
 
             # General Progress Data
             draw.text((5, 53), f"COPY: {idx + 1:04d}/{len(videos):04d} ...", fill="WHITE")
 
             draw.text((5, 68), f"Size: {filesize_in_MB:.1f} MB", fill="WHITE")
-            draw.text((0, 85), "-" * line_len, fill="WHITE")
+            draw.text((0, 85), "-" * __line_len__, fill="WHITE")
+            
+            self._disp.LCD_ShowImage(image,0,0)
 
             # Verifying the file doesn't already exist in the target device
             if target_f.is_file():
+                
+                print(f"[LOG] Checking Hash for `{source_f}` ... ", end="", flush=True)
 
                 # Writing Hash Verification Msg
                 draw.text((15, 105), "Checking Hash ...", fill="WHITE")
@@ -369,10 +379,13 @@ class Display(object):
                 # Pre-emptively mask message with a black bar displayed at next `LCD_ShowImage`
                 draw.rectangle((0, 90, Display.width, Display.height), fill="BLACK")
                 if target_f.size == source_f.size and target_f.md5sum and source_f.md5sum:
-                    print(f"[LOG] File `{source_f}` already exists => Skipped.")
+                    print("[LOG] Identical files => Skipped.")
                     continue
                 else:  # Files are different - Delete and Overwrite
+                    print("[LOG] Different files => Overwriting.")
                     target_f.unlink()
+                    
+            print(f"[LOG] Copying: {source_f.name} => {target_f} - Size: {filesize_in_MB} MB ... ", end="", flush=True)
 
             # Progress bar Update Fn
             bar_x_offset = 10
@@ -386,9 +399,11 @@ class Display(object):
                     progress=total_copied /total  #  Between 0..1
                 )
                 self._disp.LCD_ShowImage(image,0,0)
+                
+            # Display an empty bar
+            bar_callback_fn(copied=0, total_copied=0, total=filesize_in_MB)
             
-            # for progress in range(0, 100, 3):
-            #     update_fn(None, progress, 100)
+            start_t = time.perf_counter()
             copy_with_callback(
                 source_f,
                 target_f,
@@ -396,6 +411,7 @@ class Display(object):
                 callback=bar_callback_fn,
                 buffer_size=DEFAULT_BUFFER_SIZE,
             )
+            print(f"DONE (avg {filesize_in_MB / (time.perf_counter() - start_t):.1f} MB/sec)")
 
     def disp_wait_for_USB_devices_ready_loop(self):
 
